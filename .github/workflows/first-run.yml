@@ -29,7 +29,10 @@ jobs:
             binutils-arm-none-eabi ninja-build python3-venv shellcheck
 
       - name: Shell scripts are clean
-        run: shellcheck tools/bootstrap.sh tools/fetch_gbagfx.sh
+        # SC1007 is excluded: "CDPATH= cd -- ..." is a deliberate idiom that
+        # neutralises CDPATH for a single command so cd cannot resolve somewhere
+        # unexpected. shellcheck reads the empty assignment as a mistake.
+        run: shellcheck -e SC1007 tools/bootstrap.sh tools/fetch_gbagfx.sh
 
       - name: Prerequisites are reported, not guessed
         run: |
