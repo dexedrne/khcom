@@ -35,6 +35,12 @@ The project can target the following versions:
 - ninja
 - python3
 - `binutils-arm-none-eabi`
+- `gcc-arm-none-eabi`, for `arm-none-eabi-cpp`. `tools/setup_legacy_toolchain.py`
+  preprocesses the runtime library sources with it, and it ships with the cross
+  compiler rather than with binutils. Without it the legacy assembler builds and
+  then the runtime libraries fail with `Error 127`. Only the preprocessor is used,
+  so setting `CPP` to any C preprocessor also works — the call site passes `-undef
+  -nostdinc`, leaving nothing target-specific.
 - [agbcc](https://github.com/pret/agbcc):
 
   ```sh
