@@ -10,6 +10,22 @@
 [eu]: https://decomp.dev/pheenoh/khcom/eu.svg?mode=shield&label=eu
 [progress]: https://decomp.dev/pheenoh/khcom
 
+> **This is a fork.** The decompilation itself is upstream's work at
+> [pheenoh/khcom](https://github.com/pheenoh/khcom); this fork only adds setup
+> tooling, and tracks upstream for everything else.
+>
+> - `tools/bootstrap.sh` — one command from a clean checkout to a ready tree
+> - `tools/check_prerequisites.py` — reports every missing dependency at once
+> - `.github/workflows/first-run.yml` — CI for the from-scratch path
+> - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the setup walkthrough
+>
+> It also fixes two bugs that only bite a first build: `tools/fetch_gbagfx.sh`
+> cloned a repository that returns 404, and `arm-none-eabi-cpp` was required but
+> undocumented. Upstream's CI runs in a prebuilt image with the toolchain and
+> base ROMs already present, so it never walks this path.
+>
+> No ROMs or extracted assets are distributed here; supply your own dump.
+
 <!-- markdownlint-disable MD033 -->
 [<img src="https://decomp.dev/pheenoh/khcom/us.svg?w=512&h=256" width="512" height="256" alt="Progress graph for the us version">][progress]
 <!-- markdownlint-enable MD033 -->
