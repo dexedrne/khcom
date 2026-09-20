@@ -109,6 +109,17 @@ upstream repository, so the script sparse-checks-out the tool subdirectory from
 a pret game decompilation; override `GBAGFX_REPO` and `GBAGFX_SUBDIR` to source
 it elsewhere.
 
+gbagfx links against libpng and zlib, so their development headers must be
+installed or the build stops at `png.h: No such file or directory`:
+
+```sh
+pacman -S --needed libpng zlib          # Arch
+apt-get install libpng-dev zlib1g-dev   # Debian/Ubuntu
+```
+
+This only affects `tools/fetch_gbagfx.sh`. Nothing else in the tree needs libpng,
+which is why `tools/check_prerequisites.py` does not treat it as required.
+
 ## Progress reporting
 
 `tools/progress.py` summarizes an objdiff progress report and takes the report
