@@ -1,0 +1,96 @@
+name: First-run setup
+
+# The build workflow runs inside a prebuilt image that already contains agbcc
+# and the base ROMs, so it never exercises what a new contributor actually does:
+# install packages, compile agbcc from source, and build the legacy toolchain.
+# Every setup bug this repository has had lived in that gap.
+#
+# This job walks that path on a stock runner. It deliberately stops before the
+# build itself, because building needs a base ROM and ROMs are never committed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  first-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-arm-none-eabi ninja-build python3-venv shellcheck
+
+      - name: Shell scripts are clean
+        run: shellcheck tools/bootstrap.sh tools/fetch_gbagfx.sh
+
+      - name: Prerequisites are reported, not guessed
+        run: |
+          # Expected to fail here: no agbcc, no toolchain, no ROM yet.
+          python3 tools/check_prerequisites.py && {
+            echo "expected a non-zero exit before bootstrap" >&2
+            exit 1
+          }
+          echo "check_prerequisites correctly reported an unprepared tree"
+
+      - name: Bootstrap
+        run: sh tools/bootstrap.sh
+
+      - name: Toolchain is complete
+        run: |
+          for f in tools/agbcc/bin/old_agbcc \
+                   tools/legacy/bin/arm-elf-as \
+                   tools/legacy/bin/arm-elf-ld \
+                   tools/legacy/lib/libgcc.a \
+                   tools/legacy/lib/libc.a; do
+            test -f "$f" || { echo "missing $f" >&2; exit 1; }
+            echo "ok $f"
+          done
+
+      - name: Legacy tools are the pinned 2.10 versions
+        run: |
+          tools/legacy/bin/arm-elf-as --version | head -1
+          tools/legacy/bin/arm-elf-ld --version | head -1
+          tools/legacy/bin/arm-elf-as --version | grep -q '2\.10' || {
+            echo "unexpected assembler version" >&2; exit 1; }
+
+      - name: gbagfx fetches and builds
+        run: |
+          sh tools/fetch_gbagfx.sh
+          test -x tools/gbagfx/gbagfx
+          tools/gbagfx/gbagfx 2>&1 | head -3 || true
+
+      - name: Unit tests
+        run: ./.venv/bin/python -m unittest discover -s tools -p 'test_*.py' -v
+
+      - name: Only the base ROM should still be outstanding
+        run: |
+          set +e
+          out=$(./.venv/bin/python tools/check_prerequisites.py)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          # A ROM is the one thing CI cannot supply, so it must be the only failure.
+          echo "$out" | grep -q 'base ROM' || {
+            echo "expected the missing base ROM to be reported" >&2; exit 1; }
+          test "$status" -ne 0
+          echo "setup is complete apart from the base ROM, as expected"
+
+      - name: configure.py refuses without assets
+        run: |
+          # Guards the documented ordering: no ROM means no extracted assets,
+          # and configure must say so rather than producing a broken build.
+          set +e
+          out=$(./.venv/bin/python configure.py 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          test "$status" -ne 0
+          echo "configure.py correctly refused an unprepared tree"
