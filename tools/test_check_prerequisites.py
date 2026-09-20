@@ -147,5 +147,46 @@ class GbagfxTest(RootBackedTest):
         self.assertEqual(len(report.notes), 1)
 
 
+class CommandLineTest(unittest.TestCase):
+    """Run the real CLI: argument handling cannot be checked by importing.
+
+    Combining nargs='*' with choices= makes argparse validate the default on
+    some interpreters, so passing no versions failed on one Python and worked on
+    another. These run the script the way a person and CI both do.
+    """
+
+    SCRIPT = str(Path(cp.__file__).resolve())
+
+    def run_cli(self, *args):
+        import subprocess
+        import sys
+        return subprocess.run(
+            [sys.executable, self.SCRIPT, *args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_no_arguments_is_accepted(self):
+        result = self.run_cli('-q')
+        self.assertNotIn('invalid choice', result.stderr)
+        self.assertNotIn('usage:', result.stderr)
+
+    def test_explicit_versions_are_accepted(self):
+        result = self.run_cli('us', 'jp', '-q')
+        self.assertNotIn('invalid', result.stderr)
+        self.assertNotIn('usage:', result.stderr)
+
+    def test_unknown_version_is_rejected(self):
+        result = self.run_cli('bogus')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('invalid version', result.stderr)
+
+    def test_help_lists_the_real_versions(self):
+        result = self.run_cli('--help')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('{eu,jp,us}', result.stdout)
+        self.assertNotIn('[]', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

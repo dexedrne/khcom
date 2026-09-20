@@ -189,17 +189,26 @@ def check_git_available_for_gbagfx(report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    # default=[] rather than the full list: with nargs='*' argparse validates a
-    # non-empty default against choices, which would leak "[]" into the usage line.
+    # Validated by hand rather than with choices=. Combining nargs='*' with
+    # choices= makes argparse check the default too on some versions, so either
+    # default leaks "[]" into the usage line or an empty argv is rejected
+    # outright, depending on the interpreter.
     parser.add_argument(
         'versions',
         nargs='*',
-        choices=sorted(VERSIONS),
-        default=[],
+        metavar='{{{}}}'.format(','.join(sorted(VERSIONS))),
         help='versions whose base ROMs to check (default: all)',
     )
     parser.add_argument('-q', '--quiet', action='store_true', help='only print problems')
     args = parser.parse_args()
+
+    unknown = [v for v in args.versions if v not in VERSIONS]
+    if unknown:
+        parser.error(
+            'invalid version(s): {} (choose from {})'.format(
+                ', '.join(unknown), ', '.join(sorted(VERSIONS))
+            )
+        )
     versions = args.versions or sorted(VERSIONS)
 
     report = Report(quiet=args.quiet)
