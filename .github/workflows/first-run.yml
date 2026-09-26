@@ -1,0 +1,183 @@
+name: First-run setup
+
+# The main build workflow runs in a prebuilt, apt-based image that supplies agbcc
+# and its own arm-none-eabi-cpp, so it never exercises agbcc's source build, the
+# Arch packages, or the host-cpp shim a contributor without the cross compiler
+# depends on.
+#
+# These jobs walk that path on a stock Arch image, from source every time: the
+# whole bootstrap takes a couple of minutes, so there is no cache to let a later
+# run skip the builds this workflow exists to prove. They stop before the build
+# itself, because building needs a base ROM and ROMs are never committed.
+#
+# Neither job installs arm-none-eabi-gcc. Proving that the host-cpp shim is
+# sufficient is the point of the exercise, and the cross compiler is a 267 MiB
+# download / 1.9 GiB installed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: first-run-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-unit:
+    # Fast, no toolchain: seconds, not minutes. A separate job so that a lint
+    # or unit failure is reported before the slower job starts, and so that a
+    # network failure in the slow path cannot mask a broken unit test.
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Sync the package database
+        # archlinux:latest ships a minimal base and a package database that can
+        # be older than the mirrors, so this has to be the first thing to run.
+        run: pacman -Syu --noconfirm --needed git python shellcheck
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Trust the workspace
+        # Container jobs run as root, and git refuses to read a repository it
+        # considers to be owned by somebody else.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Shell scripts are clean
+        # SC1007 is excluded: "CDPATH= cd -- ..." is a deliberate idiom that
+        # neutralises CDPATH for a single command so cd cannot resolve somewhere
+        # unexpected. shellcheck reads the empty assignment as a mistake.
+        run: shellcheck -e SC1007 tools/bootstrap.sh tools/build.sh tools/fetch_gbagfx.sh
+
+      - name: Checker unit tests
+        # The system interpreter with no virtualenv, deliberately: the checker's
+        # own suite is stdlib-only, so it has to pass before anything is
+        # bootstrapped. Only that file: test_asset_objects.py imports yaml
+        # (through regional_data.py), so the full suite runs in arch-bootstrap
+        # below, under the virtualenv.
+        run: python3 -m unittest discover -s tools -p 'test_check_prerequisites.py' -v
+
+      - name: Prerequisites are reported, not guessed
+        run: |
+          # Expected to fail here: no venv, no agbcc, no toolchain, no ROM.
+          python3 tools/check_prerequisites.py && {
+            echo "expected a non-zero exit before bootstrap" >&2
+            exit 1
+          }
+          echo "check_prerequisites correctly reported an unprepared tree"
+
+  arch-bootstrap:
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Sync the package database
+        run: >-
+          pacman -Syu --noconfirm --needed
+          base-devel git ninja python arm-none-eabi-binutils libpng zlib
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Bootstrap
+        run: sh tools/bootstrap.sh
+
+      - name: Toolchain is complete
+        # Every one of these is built from source by the bootstrap, against a
+        # stock Arch image and no cross compiler.
+        run: |
+          for f in tools/agbcc/bin/old_agbcc \
+                   tools/gbagfx/gbagfx \
+                   tools/legacy/bin/arm-elf-as \
+                   tools/legacy/bin/arm-elf-ld \
+                   tools/legacy/lib/libgcc.a \
+                   tools/legacy/lib/libc.a; do
+            test -f "$f" || { echo "missing $f" >&2; exit 1; }
+            echo "ok $f"
+          done
+
+      - name: Legacy tools are the pinned 2.10 versions
+        # configure.py refuses to run on anything else, so this is a real gate
+        # rather than a formality.
+        run: |
+          tools/legacy/bin/arm-elf-as --version | head -1
+          tools/legacy/bin/arm-elf-ld --version | head -1
+          tools/legacy/bin/arm-elf-as --version | head -1 | grep -q 'GNU assembler 2\.10' || {
+            echo "unexpected assembler version" >&2; exit 1; }
+          tools/legacy/bin/arm-elf-ld --version | head -1 | grep -q 'GNU ld 2\.10' || {
+            echo "unexpected linker version" >&2; exit 1; }
+
+      - name: The shim and the venv resolve on the build's PATH
+        # No arm-none-eabi-gcc was installed, so the build can only work if the
+        # shim is reachable and .venv/bin shadows the system python3. This is
+        # the PATH tools/build.sh sets up.
+        run: |
+          test -x build/shim/arm-none-eabi-cpp
+          export PATH="$PWD/build/shim:$PWD/.venv/bin:$PATH"
+          command -v arm-none-eabi-cpp
+          test "$(command -v python3)" = "$PWD/.venv/bin/python3"
+          python3 -c 'import mapfile_parser, yaml'
+
+      - name: All unit tests
+        # Every test module in tools/, including the ones that import yaml and
+        # so could not run in lint-and-unit.
+        run: ./.venv/bin/python -m unittest discover -s tools -p 'test_*.py' -v
+
+      - name: Only the base ROM should still be outstanding
+        run: |
+          set +e
+          out=$(./.venv/bin/python tools/check_prerequisites.py)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          # A ROM is the one thing CI cannot supply, so it must be the only
+          # failure - checked by count, so that a second, unexpected failure
+          # cannot hide behind the expected one.
+          echo "$out" | grep -q '^1 prerequisite(s) missing:$' || {
+            echo "expected exactly one missing prerequisite" >&2; exit 1; }
+          echo "$out" | grep -q 'base ROM' || {
+            echo "expected the missing base ROM to be reported" >&2; exit 1; }
+          # And the preprocessor must be a note rather than a failure: no cross
+          # compiler was installed, and the shim is the supported answer. This
+          # pins that, so a future change that makes it fatal fails here.
+          if echo "$out" | grep -q 'MISSING  arm-none-eabi-cpp'; then
+            echo "the host-cpp shim should have satisfied the preprocessor check" >&2
+            exit 1
+          fi
+          test "$status" -ne 0
+          echo "setup is complete apart from the base ROM, as expected"
+
+      - name: tools/build.sh gets as far as configure.py, which refuses
+        run: |
+          # Runs the wrapper for real - its venv and shim guards, then
+          # configure.py under the venv - and guards the documented ordering:
+          # no ROM means no extracted assets, and configure.py must say so
+          # rather than produce a broken build. build.sh has to stop there.
+          set +e
+          out=$(tools/build.sh --version us 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          test "$status" -ne 0
+          # The specific refusal, so that a crash - which also exits non-zero -
+          # does not pass for one.
+          echo "$out" | grep -q 'extracted asset files for .* are missing' || {
+            echo "tools/build.sh failed, but not with the missing-assets refusal" >&2
+            exit 1; }
+          if echo "$out" | grep -q '^ninja:'; then
+            echo "ninja ran although configure.py had failed" >&2
+            exit 1
+          fi
+          echo "tools/build.sh stopped at configure.py's refusal, as it should"
