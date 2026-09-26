@@ -21,6 +21,12 @@ for the Game Boy Advance.
 > This repository does **not** contain any game assets or ROMs. An existing
 > copy of the game is required to build.
 
+> [!NOTE]
+> This fork adds Arch Linux setup tooling on top of the decompilation: a
+> prerequisite checker, an idempotent bootstrap, and a build wrapper that works
+> without the ARM cross compiler. It does not change any decompiled source —
+> see [CONTRIBUTING.md](CONTRIBUTING.md) to build from a clean checkout.
+
 The project can target the following versions:
 
 | Version | Code | SHA-1 |
@@ -31,46 +37,50 @@ The project can target the following versions:
 
 ## Dependencies
 
-- git
-- ninja
-- python3
-- PyYAML (`python3 -m pip install pyyaml`)
-- `binutils-arm-none-eabi`
-- [agbcc](https://github.com/pret/agbcc):
+On Arch Linux:
 
-  ```sh
-  git clone https://github.com/pret/agbcc
-  cd agbcc && ./build.sh && ./install.sh ../khcom
-  ```
+```sh
+sudo pacman -S --needed base-devel git ninja python arm-none-eabi-binutils libpng zlib
+```
+
+`libpng` and `zlib` are what `gbagfx` links against, and asset extraction shells
+out to `gbagfx`, so all of the above is needed. Everything else — the Python
+packages in a virtualenv, `arm-none-eabi-cpp`, [agbcc](https://github.com/pret/agbcc)
+and `gbagfx` itself — is handled by `tools/bootstrap.sh`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full from-scratch setup. The one
+non-obvious part is `arm-none-eabi-cpp`: it is written into `build.ninja` as a
+literal, so `CPP=cpp` does not stand in for it and `ninja` has to be run through
+`tools/build.sh`.
 
 ## Building
 
 - Clone the repository:
 
   ```sh
-  git clone https://github.com/pheenoh/khcom.git
+  git clone https://github.com/dexedrne/khcom.git
+  ```
+
+- Install the packages above, then bootstrap:
+
+  ```sh
+  sh tools/bootstrap.sh
   ```
 
 - Copy your legally dumped ROM(s) into `roms/` as `<code>.gba` (e.g. `roms/B8CE.gba`).
 
-- Extract assets:
+- Extract assets and build:
 
   ```sh
-  python3 tools/extract_assets.py
+  ./.venv/bin/python tools/extract_assets.py
+  tools/build.sh
   ```
 
-- Configure:
+  To use a version other than `us`, specify it with `--version`:
 
   ```sh
-  python3 configure.py
-  ```
-
-  To use a version other than `us`, specify it with `--version`.
-
-- Build:
-
-  ```sh
-  ninja
+  ./.venv/bin/python tools/extract_assets.py jp
+  tools/build.sh --version jp
   ```
 
 ## License
